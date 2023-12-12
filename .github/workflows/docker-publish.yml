@@ -1,5 +1,9 @@
 name: Publish and Sign Container Image
 
+env:
+  # Use docker.io for Docker Hub if empty
+  REGISTRY: ghcr.io
+
 on:
   schedule:
     - cron: '32 11 * * *'
@@ -12,41 +16,57 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
-
-  steps:
-  
+    steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v2
 
     - name: Install cosign
+      # https://github.com/marketplace/actions/cosign-installer
       uses: sigstore/cosign-installer@main
       with:
-        cosign-release: 'v1.4.1'
+        cosign-release: 'v1.10.0'
 
     - name: Setup Docker buildx
+      # https://github.com/marketplace/actions/docker-setup-buildx
       uses: docker/setup-buildx-action@v2
 
-    - name: Log into ghcr.io
+    - name: Log into ${{ env.REGISTRY }}
+      # https://github.com/marketplace/actions/docker-login
       uses: docker/login-action@master
       with:
-        registry: ghcr.io
+        registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+  
+    - name: Extract Docker metadata
+      id: meta
+      # https://github.com/marketplace/actions/docker-metadata-action
+      # Creats tags and labels inputs for build-push-action, specifically
+      # handles mixed case github repos such as MitchellJThomas
+      uses: docker/metadata-action@v4
+      with:
+        images: ${{ env.REGISTRY }}/${{ github.repository }}
 
     - name: Build and push container image
       id: push-step
+      # https://github.com/marketplace/actions/build-and-push-docker-images
       uses: docker/build-push-action@master
       with:
         push: true
-        tags: ghcr.io/${{ github.repository }}:latest
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
 
     - name: Sign the container image
+      shell: bash
       env:
         COSIGN_EXPERIMENTAL: "true"
-      run: cosign sign ghcr.io/${{ github.repository }}@${{ steps.push-step.outputs.digest }}
+      run: |
+        tags=( ${{ steps.meta.outputs.tags }} )
+        tag=${tags[0]}
+        echo "Signing image with tag $tag"
+        cosign sign $tag@${{ steps.push-step.outputs.digest }}
